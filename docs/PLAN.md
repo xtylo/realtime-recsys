@@ -20,12 +20,14 @@ DynamoDB, Item2Vec/FAISS candidates, NDCG evaluation, frontend. Foundation first
 
 ## Phases and days
 
-| Phase (README) | Days |
-|---|---|
-| 1. Design & data | Day 0 (setup), Day 1 (FastAPI skeleton) ✅, Day 2 (data + baseline artifacts) |
-| 2. Backend: FastAPI + AWS Lambda | Day 3 (real-time API), Day 4 (S3), Day 5 (Lambda) |
-| 3. LangChain integration | Day 6 (semantic search) |
-| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) |
+| Phase (README) | Days | Status |
+|---|---|---|
+| 1. Design & data | Day 0 (setup), Day 1 (FastAPI skeleton), Day 2 (data + baseline artifacts) | ✅ |
+| 2. Backend: FastAPI + AWS Lambda | Day 3 (real-time API), Day 4 (S3), Day 5 (Lambda) | ✅ |
+| 3. LangChain integration | Day 6 (semantic search) | ✅ |
+| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) | 🟡 k6 done locally; CI and AWS pending |
+
+What each day actually produced is recorded in [Findings log](#findings-log).
 
 ---
 
@@ -738,6 +740,7 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
 5. `src/app/infrastructure/search.py`:
    ```python
    import os
+   import tempfile
    from pathlib import Path
 
    from langchain_core.vectorstores import InMemoryVectorStore
@@ -750,7 +753,8 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
 
    def load_search_index() -> InMemoryVectorStore:
        if os.getenv("ARTIFACTS_SOURCE") == "s3":
-           path = Path("/tmp") / INDEX_FILE  # /tmp is the only writable disk on Lambda
+           # OS temp folder: /tmp on Lambda (its only writable disk), %TEMP% on Windows
+           path = Path(tempfile.gettempdir()) / INDEX_FILE
            bucket = os.environ["ARTIFACTS_BUCKET"]
            prefix = os.getenv("ARTIFACTS_PREFIX", "models/v1")
            s3_client().download_file(bucket, f"{prefix}/{INDEX_FILE}", str(path))
@@ -760,7 +764,6 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
        # Query the index with the SAME embeddings provider that built it
        return InMemoryVectorStore.load(str(path), get_embeddings())
    ```
-   > On Windows hosts `/tmp` does not exist. That branch only runs inside Lambda (Linux). Locally on Windows, use `ARTIFACTS_SOURCE=local` to test search with uvicorn, or test through the Lambda container.
 6. Add to `src/app/schemas.py`:
    ```python
    class SearchRequest(BaseModel):
@@ -849,6 +852,12 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
    ```
    Read the summary: `http_req_duration` p(95)/p(99), `http_req_failed`, `iterations`. Windows may ask to allow Python through the firewall.
    > Do not use `--workers 4` with the in-memory session: each worker is a separate process with its own memory. It is the same lesson as Day 5.
+
+   **Optional stress run**, to find where one process saturates:
+   ```powershell
+   docker compose --profile loadtest run --rm -e PROFILE=load k6
+   ```
+   Expect the thresholds to fail. That is the point: latency grows when the server saturates. k6 then exits with a non-zero code, and Docker Desktop prints a "Debug this Compose error with Gordon" hint. That hint is not a compose error. Analyze the result with Little's law (see [Findings log](#findings-log), Day 7).
 3. Update `README.md`: phase status, a screenshot or GIF, what you learned, and the first measured numbers.
 4. Read the whole code base end to end and write down open questions.
 
@@ -924,6 +933,57 @@ Do this **once**, when everything works locally. A live URL and real numbers in 
 
 ---
 
+## Findings log
+
+What was measured and learned on each day (Windows laptop, Docker Desktop, Python 3.12). The README summarizes these numbers in "Target metrics" and "Findings".
+
+### Day 2 — Artifacts
+- Sample: first 200,000 events of `2019-Oct.csv` → **100** popular products, **27,977** products with neighbors (avg **12.3**, 9,962 at the cap of 20).
+- "Training" means pre-computing statistics (weighted popularity + session co-occurrence) into lookup tables. No model weights are fitted.
+- Known limits: raw co-occurrence counts carry popularity bias (normalize with cosine/lift later), and `nrows` takes the first hours of the month, which is not a random sample.
+
+### Day 3 — Real-time recommendations
+- Items already seen in the session are excluded **by design** (discovery). Repeated events boost the product's *neighbors*, not the product itself.
+- The 20-event session window can be flushed by repeated identical events. Collapsing consecutive duplicates is an improvement candidate. Whether to exclude only purchased items depends on the business (e.g. groceries need re-purchase).
+
+### Day 4 — Local S3
+- `NoCredentialsError` means the terminal does not have `local-env.ps1` loaded. Without `S3_ENDPOINT_URL`, boto3 would target **real AWS**, so the error is a useful safety net. Variables live per terminal session.
+
+### Day 5 — Lambda execution model
+| Measurement (local RIE) | Result |
+|---|---|
+| Cold start (`INIT REPORT durationMs`) | ~14.2 s (inflated: Windows bind mount + emulator) |
+| Warm invocations | 2.5–6.3 ms |
+| Session after `docker compose restart lambda` | Lost |
+
+- The RIE `REPORT` line shows `Init Duration: 0.61 ms` and `Memory Size: 3008 MB`. Both are emulator artifacts, so trust `INIT REPORT` instead.
+- Mangum runs the lifespan on every invocation, which is why `init_state` is called at module level in `handler.py`.
+- Decision recorded in [ADR 0001](adr/0001-session-state.md).
+
+### Day 6 — Search
+- The local Lambda's environment comes from `docker-compose.yml`, **not** from your terminal (`503 Search is disabled` until `ENABLE_SEARCH: "true"` is set there). `restart` keeps old variables; use `up -d --force-recreate lambda`.
+- Hard-coded `/tmp` broke uvicorn on Windows (`FileNotFoundError: \tmp\search_index.json...`). It was fixed with `tempfile.gettempdir()`.
+- Embeddings vs artifacts: `search_index.json` is an artifact *containing* embeddings, while `popular.json` and `related.json` are artifacts with plain statistics.
+- Decision recorded in [ADR 0002](adr/0002-llm-out-of-hot-path.md).
+
+### Day 7 — Load testing
+**Smoke** (5 VUs, 30 s, one uvicorn process): `/recommendations` p95 **4.0 ms**, p99 **4.7 ms**, **0%** errors, ~5 req/s.
+
+**Stress** (`PROFILE=load`: ramp to 1,000 VUs, hold 10 min, k6 on the same laptop):
+
+| Metric | Result |
+|---|---|
+| Requests | 558,084 in 16 min (avg ~580 req/s) |
+| Errors | 0% |
+| `/recommendations` p95 / p99 | 2.07 s / 2.55 s |
+| Iteration duration | avg 2.8 s (ideal ~1 s) |
+
+Little's law: 1,000 VUs ÷ ~3.4 s per iteration ≈ 290 it/s ≈ **~600 req/s** capacity for one Python process. Each VU makes ~2 req/s, so the knee is at **~300 VUs**. Past the knee, latency grows from queueing, with no errors, because k6's closed model lets each VU wait for its response.
+
+Implication for AWS: Lambda scales out, so the concurrency needed is req/s × duration ≈ 2,000 × ~0.005 s ≈ **10–20 instances** for the 2,000 req/s target. Check the account's Lambda concurrency quota before the Day 8 `load` run.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -942,6 +1002,10 @@ Do this **once**, when everything works locally. A live URL and real numbers in 
 | PowerShell scripts blocked | Execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | (Day 8) `AccessDeniedException` from Bedrock | Model access not enabled | Enable it in the Bedrock console |
 | (Day 8) `BucketAlreadyExists` | Bucket names are global | Pick a more unique `artifacts_bucket_name` |
+| `NoCredentialsError: Unable to locate credentials` | `local-env.ps1` not loaded in this terminal | `. .\src\scripts\local-env.ps1` (check with `$env:S3_ENDPOINT_URL`) |
+| Local Lambda returns `503 Search is disabled` | `ENABLE_SEARCH` is `"false"` in `docker-compose.yml` | Set it to `"true"`, then `docker compose --profile lambda up -d --force-recreate lambda` |
+| `FileNotFoundError: '\\tmp\\search_index.json...'` on Windows | Old code with a hard-coded `/tmp` | Use `tempfile.gettempdir()` (already fixed in `search.py`) |
+| k6 ends with "Debug this Compose error with Gordon" | k6 exits non-zero when a threshold fails | Not a compose error: read the k6 summary |
 
 ---
 
@@ -961,10 +1025,10 @@ Do this **once**, when everything works locally. A live URL and real numbers in 
 
 - [x] Day 0 — Tools installed (no AWS account)
 - [x] Day 1 — FastAPI running (+ Lambda handler skeleton)
-- [ ] Day 2 — Recommender artifacts
-- [ ] Day 3 — Real-time recommendations + tests
-- [ ] Day 4 — Artifacts from local S3 (moto)
-- [ ] Day 5 — Local Lambda + ADR 0001
-- [ ] Day 6 — Search with LangChain + Ollama + ADR 0002
-- [ ] Day 7 — CI + README + local k6
+- [x] Day 2 — Recommender artifacts
+- [x] Day 3 — Real-time recommendations + tests
+- [x] Day 4 — Artifacts from local S3 (moto)
+- [x] Day 5 — Local Lambda + ADR 0001
+- [x] Day 6 — Search with LangChain + Ollama + ADR 0002
+- [ ] Day 7 — CI + README + local k6 (k6 smoke + stress done, README updated; CI workflow pending push)
 - [ ] Day 8 (optional) — Terraform deploy, load test and cleanup

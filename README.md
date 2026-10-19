@@ -10,16 +10,16 @@
 
 **New technologies to learn:** Python 3, FastAPI, AWS Lambda, LangChain, Terraform
 
-> 🚧 Work in progress. Step-by-step plan: [`docs/PLAN.md`](docs/PLAN.md).
+> 🚧 Work in progress: phases 1–3 are complete and verified locally; AWS deployment and load testing are next. Step-by-step plan: [`docs/PLAN.md`](docs/PLAN.md). Measured results: [Findings](#findings).
 
 ## Phased plan
 
 | Phase | Scope | Plan days | Status |
 |---|---|---|---|
-| **1. Design & data** | Architecture, dataset (REES46), baseline recommender artifacts | Days 0–2 | 🟡 In progress |
-| **2. Backend: FastAPI + AWS Lambda** | Session-aware API, S3 model loading, Lambda packaging | Days 3–5 | ⬜ |
-| **3. LangChain integration** | Natural-language product search with embeddings | Day 6 | ⬜ |
-| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | ⬜ |
+| **1. Design & data** | Architecture, dataset (REES46), baseline recommender artifacts | Days 0–2 | ✅ Done |
+| **2. Backend: FastAPI + AWS Lambda** | Session-aware API, S3 model loading, Lambda packaging | Days 3–5 | ✅ Done (local Lambda emulator) |
+| **3. LangChain integration** | Natural-language product search with embeddings | Day 6 | ✅ Done (Ollama embeddings) |
+| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | 🟡 Local load tests done; AWS pending |
 
 ## Overview
 
@@ -152,15 +152,65 @@ The script fails the run if the error rate is ≥ 0.1% or p99 latency of `/recom
 
 ## Target metrics
 
-| Metric | Target | How it is measured | Result |
-|---|---|---|---|
-| Throughput | 2,000 req/s sustained | k6 `load` profile against AWS | TBD |
-| Latency p50 / p95 / p99 | p99 < 200 ms | k6 `http_req_duration` for `/recommendations` | TBD |
-| Error rate | < 0.1% | k6 `http_req_failed` and Lambda error metrics | TBD |
-| Saturation point | Degradation from ~3,500 req/s | Step-up k6 run until latency or errors break the targets | TBD |
-| Cold start | Measured and documented | CloudWatch `Init Duration` | TBD |
-| Recommendation quality | Beat the popularity baseline | Offline Recall@10 / NDCG@10 on a temporal split | TBD |
-| Cost | Measured and documented | Cost per 1M requests (Lambda + API Gateway + S3) | TBD |
+| Metric | Target | How it is measured | Local result (laptop) | AWS result |
+|---|---|---|---|---|
+| Throughput | 2,000 req/s sustained | k6 `load` profile | **~600 req/s** with one uvicorn process (saturated, see [Findings](#findings)) | TBD |
+| Latency p95 / p99 (`/recommendations`) | p99 < 200 ms | k6 `http_req_duration{endpoint:recommendations}` | **4.0 ms / 4.7 ms** at low load (5 VUs) | TBD |
+| Error rate | < 0.1% | k6 `http_req_failed` + Lambda error metrics | **0%** (0 of 558,084 requests, even when saturated) | TBD |
+| Saturation point | Degradation from ~3,500 req/s | Step-up k6 run until latency or errors break the targets | **~600 req/s / ~300 VUs** for a single process | TBD |
+| Cold start | Measured and documented | Lambda `Init Duration` | ~14.2 s in the local emulator (inflated, see Findings) | TBD |
+| Warm invocation | — | Lambda `Duration` | **2.5–6.3 ms** (local Lambda emulator) | TBD |
+| Recommendation quality | Beat the popularity baseline | Offline Recall@10 / NDCG@10 on a temporal split | Not measured yet | — |
+| Cost | Measured and documented | Cost per 1M requests (Lambda + API Gateway + S3) | — | TBD |
+
+## Findings
+
+What was measured and learned while building the local foundation (Days 2–7). Environment: Windows laptop, Docker Desktop, Python 3.12.
+
+### 1. Model artifacts (Day 2)
+- Built from the first **200,000 events** of REES46 *2019-Oct*: **100** popular products and **27,977** products with co-occurrence neighbors (avg **12.3** related items each; 9,962 reach the cap of 20).
+- Raw co-occurrence counts favor products that appear everywhere (popular items show up as "related" to many products). This is popularity bias, and normalization (cosine or lift) is a planned improvement.
+- The sample covers only the first hours of October (`nrows` is not a random sample). This is a known temporal bias.
+
+### 2. Recommendation behavior (Day 3)
+- Recommendations change on every event. Weights: `purchase` 5 > `cart` 3 > `view` 1, with a 0.8 recency decay.
+- Products already seen in the session are **excluded on purpose** (discovery carousel). Repeating the same event strengthens that product's *neighbors*, not the product itself.
+- The session keeps only the last 20 events, so a burst of repeated events can push older context out. Collapsing consecutive duplicates is a planned improvement.
+
+### 3. Lambda execution model (Day 5)
+| Measurement (local Lambda Runtime Interface Emulator) | Result |
+|---|---|
+| Cold start (`INIT REPORT durationMs`) | ~14.2 s |
+| Warm invocations | 2.5–6.3 ms |
+| Session after restarting the function (= new instance) | Lost |
+
+- The 14.2 s cold start is **not representative**: Docker on Windows reads thousands of package files from a bind mount. The RIE's own `REPORT` line also shows a misleading `Init Duration: 0.61 ms` and a fake `Memory Size`. The real number will come from AWS.
+- **Mangum runs the FastAPI lifespan on every invocation.** Initialization therefore lives at module level in `src/lambda/handler.py` (once per cold start), with `lifespan="off"`.
+- Each Lambda instance has its own memory and serves one request at a time, so in-memory session state is not shared → [ADR 0001](docs/adr/0001-session-state.md) (DynamoDB for production).
+
+### 4. Search with embeddings (Day 6)
+- `/search` uses an embeddings model (`nomic-embed-text` via Ollama locally, Titan on Bedrock in AWS) through LangChain's `Embeddings` interface. No generative LLM is called per request → [ADR 0002](docs/adr/0002-llm-out-of-hot-path.md).
+- Configuration is per runtime. The local Lambda reads its environment from `docker-compose.yml`, not from the developer's terminal, the same way the real Lambda reads it from Terraform. Changing it requires recreating the container (`--force-recreate`).
+- The downloaded index is stored in the OS temp folder (`tempfile.gettempdir()`), which is `/tmp` on Lambda and `%TEMP%` on Windows.
+
+### 5. Load testing (Day 7)
+**Smoke test** (k6, 5 VUs, 30 s, single uvicorn process): p95 **3.8 ms**, p99 **4.7 ms** for `/recommendations`, **0%** errors, ~5 req/s. The hot path is in-memory lookups, which supports the design in ADR 0002.
+
+**Stress test** (k6 `load` profile: ramp to 1,000 VUs, hold 10 min; uvicorn and k6 on the same laptop):
+
+| Metric | Result |
+|---|---|
+| Requests | 558,084 in 16 min (avg **~580 req/s**) |
+| Errors | **0%** |
+| `/recommendations` p95 / p99 | **2.07 s / 2.55 s** |
+| Iteration duration | avg 2.8 s (ideal ~1 s) |
+
+Analysis with **Little's law** (`throughput = concurrency / time per iteration`):
+- 1,000 VUs ÷ ~3.4 s per iteration ≈ 290 iterations/s ≈ **~600 req/s**, the capacity of one Python process on this machine.
+- Each VU generates ~2 req/s, so saturation starts at ~600 ÷ 2 ≈ **300 VUs**. Beyond that, extra users only add queueing: latency grows, errors do not. k6 uses a closed model, where each VU waits for its response, so load self-throttles.
+- Limits come from a single process (the GIL), k6 competing for the same CPU, and Docker Desktop networking.
+
+**Architectural implication:** one uvicorn process scales *vertically* (one queue). Lambda scales *horizontally* (one instance per concurrent request). Required concurrency = req/s × duration ≈ 2,000 × ~0.005 s ≈ **10–20 concurrent Lambda instances** for the 2,000 req/s target, well within default quotas. Adding uvicorn `--workers` would raise local capacity but split the in-memory session, the same problem documented in ADR 0001.
 
 ## Tests (unit / integration)
 
@@ -209,6 +259,7 @@ What this project demonstrates (updated as phases are completed):
 - Infrastructure as code with Terraform (API Gateway, Lambda, S3, IAM, CloudWatch).
 - Developing against local AWS emulators at $0, with the same Lambda package used locally and in the cloud.
 - Load testing with k6 and measuring latency percentiles, error rate, cold starts and cost.
+- Finding a saturation point and explaining it with Little's law, then translating it into Lambda concurrency.
 
 ## Learning path
 

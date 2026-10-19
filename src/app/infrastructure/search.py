@@ -1,4 +1,5 @@
 import os
+import tempfile
 from pathlib import Path
 
 from langchain_core.vectorstores import InMemoryVectorStore
@@ -11,7 +12,8 @@ INDEX_FILE = "search_index.json"
 
 def load_search_index() -> InMemoryVectorStore:
     if os.getenv("ARTIFACTS_SOURCE") == "s3":
-        path = Path("/tmp") / INDEX_FILE  # /tmp is the only writable disk on Lambda
+        # OS temp folder: /tmp on Lambda (its only writable disk), %TEMP% on Windows
+        path = Path(tempfile.gettempdir()) / INDEX_FILE
         bucket = os.environ["ARTIFACTS_BUCKET"]
         prefix = os.getenv("ARTIFACTS_PREFIX", "models/v1")
         s3_client().download_file(bucket, f"{prefix}/{INDEX_FILE}", str(path))
