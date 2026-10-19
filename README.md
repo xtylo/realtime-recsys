@@ -1,5 +1,12 @@
 # Real-Time Recommendation System
 
+[![CI](https://github.com/xtylo/RealTimeRecSys/actions/workflows/ci.yml/badge.svg)](https://github.com/xtylo/RealTimeRecSys/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![AWS Lambda](https://img.shields.io/badge/AWS%20Lambda-FF9900?logo=awslambda&logoColor=white)
+![LangChain](https://img.shields.io/badge/LangChain-1C3C3C?logo=langchain&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-844FBA?logo=terraform&logoColor=white)
+
 **Problem:** E-commerce platforms lose sales because their recommendations do not adapt to what users are doing *right now*.
 
 **Solution:** A real-time recommendation API that updates product suggestions on every user interaction (view, add-to-cart, purchase) within the same session. It is built with Python 3, FastAPI, AWS Lambda, S3 and LangChain.
@@ -19,7 +26,7 @@
 | **1. Design & data** | Architecture, dataset (REES46), baseline recommender artifacts | Days 0–2 | ✅ Done |
 | **2. Backend: FastAPI + AWS Lambda** | Session-aware API, S3 model loading, Lambda packaging | Days 3–5 | ✅ Done (local Lambda emulator) |
 | **3. LangChain integration** | Natural-language product search with embeddings | Day 6 | ✅ Done (Ollama embeddings) |
-| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | 🟡 Local load tests done; AWS pending |
+| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | 🟡 CI green + local load tests done; AWS deployment pending |
 
 ## Overview
 

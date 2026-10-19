@@ -25,7 +25,7 @@ DynamoDB, Item2Vec/FAISS candidates, NDCG evaluation, frontend. Foundation first
 | 1. Design & data | Day 0 (setup), Day 1 (FastAPI skeleton), Day 2 (data + baseline artifacts) | ✅ |
 | 2. Backend: FastAPI + AWS Lambda | Day 3 (real-time API), Day 4 (S3), Day 5 (Lambda) | ✅ |
 | 3. LangChain integration | Day 6 (semantic search) | ✅ |
-| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) | 🟡 k6 done locally; CI and AWS pending |
+| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) | 🟡 Day 7 ✅ (CI green, k6 local); Day 8 (AWS) pending |
 
 What each day actually produced is recorded in [Findings log](#findings-log).
 
@@ -1030,5 +1030,5 @@ Implication for AWS: Lambda scales out, so the concurrency needed is req/s × du
 - [x] Day 4 — Artifacts from local S3 (moto)
 - [x] Day 5 — Local Lambda + ADR 0001
 - [x] Day 6 — Search with LangChain + Ollama + ADR 0002
-- [ ] Day 7 — CI + README + local k6 (k6 smoke + stress done, README updated; CI workflow pending push)
+- [x] Day 7 — CI (green) + README + local k6 (smoke + stress)
 - [ ] Day 8 (optional) — Terraform deploy, load test and cleanup
