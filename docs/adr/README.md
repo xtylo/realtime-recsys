@@ -5,7 +5,7 @@ One decision per file: `NNNN-short-title.md`, with three sections: **Context**, 
 | ADR | Decision | Status |
 |---|---|---|
 | [0001](0001-session-state.md) | Session state: in-memory now, DynamoDB in production (Day 5) | Accepted |
-| 0002 | Keep the LLM out of the recommendation hot path (Day 6) | Pending |
+| [0002](0002-llm-out-of-hot-path.md) | Keep generative LLMs out of the hot path; embeddings for search (Day 6) | Accepted |
 | 0003 | moto + Lambda RIE + Ollama instead of LocalStack for local development | Pending |
 | 0004 | Lambda zip package from S3 instead of a container image | Pending |
 

@@ -14,3 +14,14 @@ class Event(BaseModel):
 class Recommendation(BaseModel):
     product_id: int
     score: float
+
+
+class SearchRequest(BaseModel):
+    query: str
+    k: int = 10
+
+
+class SearchResult(BaseModel):
+    product_id: int
+    description: str
+    similarity: float  # cosine: higher = more similar

@@ -1,12 +1,14 @@
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from app.domain.recommender import Recommender
 from app.infrastructure.artifacts import load_artifacts
+from app.infrastructure.search import load_search_index
 from app.infrastructure.session_store import InMemorySessionStore
-from app.schemas import Event, Recommendation
+from app.schemas import Event, Recommendation, SearchRequest, SearchResult
 
 
 def init_state(app: FastAPI) -> None:
@@ -14,6 +16,7 @@ def init_state(app: FastAPI) -> None:
     related, popular = load_artifacts()
     app.state.recommender = Recommender(related, popular)
     app.state.sessions = InMemorySessionStore()
+    app.state.search_index = load_search_index() if os.getenv("ENABLE_SEARCH") == "true" else None
 
 
 @asynccontextmanager
@@ -52,3 +55,15 @@ def track_event(event: Event, sessions: SessionsDep):
 def recommendations(session_id: str, recommender: RecommenderDep, sessions: SessionsDep, k: int = 10):
     history = sessions.get(session_id)
     return [Recommendation(product_id=p, score=s) for p, s in recommender.recommend(history, k)]
+
+
+@app.post("/search", response_model=list[SearchResult])
+def search(req: SearchRequest, request: Request):
+    index = request.app.state.search_index
+    if index is None:
+        raise HTTPException(status_code=503, detail="Search is disabled")
+    results = index.similarity_search_with_score(req.query, k=req.k)
+    return [
+        SearchResult(product_id=doc.metadata["product_id"], description=doc.page_content, similarity=float(score))
+        for doc, score in results
+    ]

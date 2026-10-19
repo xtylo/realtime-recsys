@@ -13,6 +13,6 @@ $env:ARTIFACTS_PREFIX      = "models/v1"
 $env:S3_ENDPOINT_URL       = "http://localhost:5000"
 $env:EMBEDDINGS_PROVIDER   = "ollama"
 $env:OLLAMA_URL            = "http://localhost:11434"
-$env:ENABLE_SEARCH         = "false"     # set to "true" on Day 6
+$env:ENABLE_SEARCH         = "true"     # set to "true" on Day 6
 
 Write-Host "Local mode on: S3 -> $env:S3_ENDPOINT_URL | embeddings -> $env:OLLAMA_URL"

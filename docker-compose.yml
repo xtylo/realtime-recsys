@@ -68,7 +68,7 @@ services:
       - ./build/lambda:/var/task:ro
     environment:
       <<: *local-aws-env
-      ENABLE_SEARCH: "false" # "true" on Day 6 (requires --profile ai)
+      ENABLE_SEARCH: "true" # "true" on Day 6 (requires --profile ai)
     depends_on:
       - s3
 

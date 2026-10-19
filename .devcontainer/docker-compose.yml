@@ -20,4 +20,4 @@ services:
       S3_ENDPOINT_URL: http://s3:5000
       EMBEDDINGS_PROVIDER: ollama
       OLLAMA_URL: http://ollama:11434
-      ENABLE_SEARCH: "false"
+      ENABLE_SEARCH: "true"
