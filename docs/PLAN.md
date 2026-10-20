@@ -25,7 +25,7 @@ DynamoDB, Item2Vec/FAISS candidates, NDCG evaluation, frontend. Foundation first
 | 1. Design & data | Day 0 (setup), Day 1 (FastAPI skeleton), Day 2 (data + baseline artifacts) | ✅ |
 | 2. Backend: FastAPI + AWS Lambda | Day 3 (real-time API), Day 4 (S3), Day 5 (Lambda) | ✅ |
 | 3. LangChain integration | Day 6 (semantic search) | ✅ |
-| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) | 🟡 Day 7 ✅ (CI green, k6 local); Day 8 (AWS) pending |
+| 4. Deploy, latency & load testing | Day 7 (CI + k6 locally), Day 8 (Terraform + AWS + k6) | ✅ Day 7 (CI green, k6 local) and Day 8 (deployed and load-tested on AWS) |
 
 What each day actually produced is recorded in [Findings log](#findings-log).
 
@@ -880,11 +880,12 @@ Do this **once**, when everything works locally. A live URL and real numbers in 
    ```powershell
    winget install Amazon.AWSCLI
    winget install Hashicorp.Terraform
-   aws configure            # region: us-east-1
+   aws configure            # region: us-east-1   (or: aws login)
    aws sts get-caller-identity
    ```
+   If you sign in with `aws login`, boto3 needs the AWS Common Runtime to read those credentials: `uv add --dev "botocore[crt]"`. If another tool does not understand them either, export them for the current terminal: `aws configure export-credentials --format powershell | Invoke-Expression`.
    **Use a new terminal WITHOUT `local-env.ps1`**, so the fake credentials and `S3_ENDPOINT_URL` do not point to moto.
-3. In the **Amazon Bedrock** console → *Model catalog*, check that **Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`) is available in `us-east-1`. Enable model access if asked.
+3. In the **Amazon Bedrock** console → *Model catalog*, check that **Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`) is available in `us-east-1`. Enable model access if asked. New accounts get `AccessDeniedException: Your account is currently being verified` until verification finishes (usually < 2 h). Meanwhile you can deploy with `enable_search = false`.
 4. Add the Bedrock provider and **rebuild the search index with Bedrock**. Ollama vectors are not compatible with Titan vectors.
    ```powershell
    uv add langchain-aws
@@ -982,6 +983,45 @@ Little's law: 1,000 VUs ÷ ~3.4 s per iteration ≈ 290 it/s ≈ **~600 req/s** 
 
 Implication for AWS: Lambda scales out, so the concurrency needed is req/s × duration ≈ 2,000 × ~0.005 s ≈ **10–20 instances** for the 2,000 req/s target. Check the account's Lambda concurrency quota before the Day 8 `load` run.
 
+### Day 8 — AWS deployment and load test
+Terraform created 13 resources (API Gateway HTTP API, Lambda python3.12 1,024 MB from an S3 zip, S3 bucket, IAM role, log group). k6 ran from a laptop in Sonora, Mexico, against `us-east-1`.
+
+| Run | Requests | Errors | `/recommendations` p95 / p99 | Throughput |
+|---|---|---|---|---|
+| Smoke (5 VUs, 30 s) | 128 | 0% | 112 ms / 119 ms | ~4 req/s |
+| Load (ramp to 1,000 VUs, hold 10 min) | 1,320,076 | 0% | 101 ms / 114 ms | avg 1,374 req/s, ~1,700 req/s during the hold |
+
+CloudWatch (Lambda metrics + Logs Insights over `REPORT` lines):
+
+| Metric | Value |
+|---|---|
+| Invocations / errors / throttles | 1,320,206 / 0 / 0 |
+| Duration avg / p99 / max | 2.86 ms / 4.24 ms / 198 ms |
+| Cold starts | 248 (0.019%) |
+| Init duration avg / max | 3.36 s / 3.70 s |
+| Max memory used | 191 MB of 1,024 MB |
+| Peak concurrent executions | 275 |
+
+Logs Insights query used:
+```
+filter @type = "REPORT"
+| stats count() as invocations, count(@initDuration) as cold_starts,
+        avg(@initDuration) as avg_init_ms, max(@initDuration) as max_init_ms,
+        avg(@duration) as avg_duration_ms, pct(@duration, 99) as p99_duration_ms,
+        max(@maxMemoryUsed) / 1000 / 1000 as max_memory_mb
+```
+
+Lessons:
+- **No saturation at ~1,700 req/s.** Latency at 1,000 VUs was the same as at 5 VUs, and iteration time stayed at 1.18 s. The local single process saturated at ~600 req/s, so horizontal scaling is validated.
+- **~90–110 ms of the client latency is network** (Mexico ↔ us-east-1 + API Gateway). In-Lambda p99 is 4.24 ms.
+- **2,000 req/s was not reached because of k6's closed model:** 1,000 VUs ÷ 1.18 s ≈ 1,700 req/s. Next time, use the `constant-arrival-rate` executor (open model) to test a throughput target.
+- **Cold starts amplify scale-out:** the warm-state estimate was ~5–10 instances, but the peak was 275 with 248 cold starts. Each new instance takes ~3.4 s to initialize, and requests that arrive meanwhile trigger even more instances. Tuning options: smaller package and lazy imports, SnapStart for Python, provisioned concurrency.
+- **Cost estimate (list prices, before free tier):** ~$1.66 for the test, about $1.3 per 1M requests. ~80% is API Gateway; a Lambda Function URL would remove it, at the cost of API Gateway features.
+- **Operational gotchas:**
+  - The tfvars placeholder `<your-name>` is invalid as a bucket name. Terraform had already created 5 resources, and the next `apply` continued from the saved state.
+  - `aws login` credentials need `botocore[crt]`.
+  - Bedrock is blocked while a new account is being verified.
+
 ---
 
 ## Troubleshooting
@@ -1002,6 +1042,9 @@ Implication for AWS: Lambda scales out, so the concurrency needed is req/s × du
 | PowerShell scripts blocked | Execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | (Day 8) `AccessDeniedException` from Bedrock | Model access not enabled | Enable it in the Bedrock console |
 | (Day 8) `BucketAlreadyExists` | Bucket names are global | Pick a more unique `artifacts_bucket_name` |
+| (Day 8) `validating S3 Bucket (recsys-<your-name>-artifacts) name` | Placeholder left in `terraform.tfvars` | Set a real name (lowercase, digits, hyphens) and run `terraform apply` again; the state keeps what was already created |
+| (Day 8) `Using the login credential provider requires ... botocore[crt]` | Signed in with `aws login` | `uv add --dev "botocore[crt]"` |
+| (Day 8) `AccessDeniedException: Your account is currently being verified` | New AWS account not verified yet | Wait (usually < 2 h); deploy with `enable_search = false` meanwhile |
 | `NoCredentialsError: Unable to locate credentials` | `local-env.ps1` not loaded in this terminal | `. .\src\scripts\local-env.ps1` (check with `$env:S3_ENDPOINT_URL`) |
 | Local Lambda returns `503 Search is disabled` | `ENABLE_SEARCH` is `"false"` in `docker-compose.yml` | Set it to `"true"`, then `docker compose --profile lambda up -d --force-recreate lambda` |
 | `FileNotFoundError: '\\tmp\\search_index.json...'` on Windows | Old code with a hard-coded `/tmp` | Use `tempfile.gettempdir()` (already fixed in `search.py`) |
@@ -1031,4 +1074,5 @@ Implication for AWS: Lambda scales out, so the concurrency needed is req/s × du
 - [x] Day 5 — Local Lambda + ADR 0001
 - [x] Day 6 — Search with LangChain + Ollama + ADR 0002
 - [x] Day 7 — CI (green) + README + local k6 (smoke + stress)
-- [ ] Day 8 (optional) — Terraform deploy, load test and cleanup
+- [x] Day 8 (optional) — Terraform deploy and AWS load test (1.32M requests, 0 errors)
+- [ ] Cleanup: `terraform -chdir=src/infra/terraform destroy`

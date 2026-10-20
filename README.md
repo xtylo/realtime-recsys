@@ -11,13 +11,15 @@
 
 **Solution:** A real-time recommendation API that updates product suggestions on every user interaction (view, add-to-cart, purchase) within the same session. It is built with Python 3, FastAPI, AWS Lambda, S3 and LangChain.
 
-**Impact (design targets):** Sized for **1M daily users** (~2,000 req/s at peak) with **p99 latency < 200 ms**. Business impact is estimated offline by replaying real e-commerce sessions and comparing against a popularity baseline. Measured results are published in [Target metrics](#target-metrics) as each phase is completed.
+**Impact (design targets):** Sized for **1M daily users** (~2,000 req/s at peak) with **p99 latency < 200 ms**. Business impact is estimated offline by replaying real e-commerce sessions and comparing against a popularity baseline. Measured results are published in [Target metrics](#target-metrics).
+
+**Measured on AWS:** **1.32M requests** at **~1,700 req/s** sustained with **0 errors** and **0 throttles**. End-to-end p99 was **114 ms** from Mexico to us-east-1, and in-Lambda p99 was **4.2 ms**. Estimated cost: **~$1.3 per million requests**.
 
 **Tech stack:** Python 3.12 · FastAPI · AWS Lambda · Amazon S3 · API Gateway · LangChain · Amazon Bedrock · Terraform · Docker · k6
 
 **New technologies to learn:** Python 3, FastAPI, AWS Lambda, LangChain, Terraform
 
-> 🚧 Work in progress: phases 1–3 are complete and verified locally; AWS deployment and load testing are next. Step-by-step plan: [`docs/PLAN.md`](docs/PLAN.md). Measured results: [Findings](#findings).
+> ✅ Foundation complete: built and verified locally, then deployed to AWS with Terraform and load-tested. Step-by-step plan: [`docs/PLAN.md`](docs/PLAN.md). Measured results: [Findings](#findings). Next steps: DynamoDB sessions, offline evaluation, cold-start tuning.
 
 ## Phased plan
 
@@ -26,7 +28,7 @@
 | **1. Design & data** | Architecture, dataset (REES46), baseline recommender artifacts | Days 0–2 | ✅ Done |
 | **2. Backend: FastAPI + AWS Lambda** | Session-aware API, S3 model loading, Lambda packaging | Days 3–5 | ✅ Done (local Lambda emulator) |
 | **3. LangChain integration** | Natural-language product search with embeddings | Day 6 | ✅ Done (Ollama embeddings) |
-| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | 🟡 CI green + local load tests done; AWS deployment pending |
+| **4. Deploy, latency & load testing** | CI, Terraform deployment, k6 load tests, offline uplift estimate | Days 7–8 | ✅ Done: CI green, local and AWS load tests |
 
 ## Overview
 
@@ -161,14 +163,14 @@ The script fails the run if the error rate is ≥ 0.1% or p99 latency of `/recom
 
 | Metric | Target | How it is measured | Local result (laptop) | AWS result |
 |---|---|---|---|---|
-| Throughput | 2,000 req/s sustained | k6 `load` profile | **~600 req/s** with one uvicorn process (saturated, see [Findings](#findings)) | TBD |
-| Latency p95 / p99 (`/recommendations`) | p99 < 200 ms | k6 `http_req_duration{endpoint:recommendations}` | **4.0 ms / 4.7 ms** at low load (5 VUs) | TBD |
-| Error rate | < 0.1% | k6 `http_req_failed` + Lambda error metrics | **0%** (0 of 558,084 requests, even when saturated) | TBD |
-| Saturation point | Degradation from ~3,500 req/s | Step-up k6 run until latency or errors break the targets | **~600 req/s / ~300 VUs** for a single process | TBD |
-| Cold start | Measured and documented | Lambda `Init Duration` | ~14.2 s in the local emulator (inflated, see Findings) | TBD |
-| Warm invocation | — | Lambda `Duration` | **2.5–6.3 ms** (local Lambda emulator) | TBD |
+| Throughput | 2,000 req/s sustained | k6 `load` profile | **~600 req/s** with one uvicorn process (saturated, see [Findings](#findings)) | **~1,700 req/s** sustained, **not saturated** (load generator limit, see Findings) |
+| Latency p95 / p99 (`/recommendations`) | p99 < 200 ms | k6 `http_req_duration{endpoint:recommendations}` | **4.0 ms / 4.7 ms** at low load (5 VUs) | **101 ms / 114 ms** at 1,000 VUs, end to end from Mexico (mostly network) ✅ |
+| Error rate | < 0.1% | k6 `http_req_failed` + Lambda error metrics | **0%** (0 of 558,084 requests, even when saturated) | **0%**: 0 errors and 0 throttles in 1,320,206 invocations ✅ |
+| Saturation point | Degradation from ~3,500 req/s | Step-up k6 run until latency or errors break the targets | **~600 req/s / ~300 VUs** for a single process | Not reached at ~1,700 req/s (peak concurrency 275 instances) |
+| Cold start | Measured and documented | Lambda `Init Duration` | ~14.2 s in the local emulator (inflated, see Findings) | **avg 3.36 s, max 3.70 s**; 248 cold starts (0.019% of invocations) |
+| Warm invocation | — | Lambda `Duration` | **2.5–6.3 ms** (local Lambda emulator) | **avg 2.86 ms, p99 4.24 ms**; max memory 191 MB of 1,024 MB |
 | Recommendation quality | Beat the popularity baseline | Offline Recall@10 / NDCG@10 on a temporal split | Not measured yet | — |
-| Cost | Measured and documented | Cost per 1M requests (Lambda + API Gateway + S3) | — | TBD |
+| Cost | Measured and documented | Cost per 1M requests (Lambda + API Gateway + S3) | — | **~$1.3 per 1M requests** (estimate at list prices; ~80% API Gateway) |
 
 ## Findings
 
@@ -191,7 +193,7 @@ What was measured and learned while building the local foundation (Days 2–7). 
 | Warm invocations | 2.5–6.3 ms |
 | Session after restarting the function (= new instance) | Lost |
 
-- The 14.2 s cold start is **not representative**: Docker on Windows reads thousands of package files from a bind mount. The RIE's own `REPORT` line also shows a misleading `Init Duration: 0.61 ms` and a fake `Memory Size`. The real number will come from AWS.
+- The 14.2 s cold start is **not representative**: Docker on Windows reads thousands of package files from a bind mount. The RIE's own `REPORT` line also shows a misleading `Init Duration: 0.61 ms` and a fake `Memory Size`. On AWS the cold start was **3.36 s** on average (see section 6).
 - **Mangum runs the FastAPI lifespan on every invocation.** Initialization therefore lives at module level in `src/lambda/handler.py` (once per cold start), with `lifespan="off"`.
 - Each Lambda instance has its own memory and serves one request at a time, so in-memory session state is not shared → [ADR 0001](docs/adr/0001-session-state.md) (DynamoDB for production).
 
@@ -217,7 +219,44 @@ Analysis with **Little's law** (`throughput = concurrency / time per iteration`)
 - Each VU generates ~2 req/s, so saturation starts at ~600 ÷ 2 ≈ **300 VUs**. Beyond that, extra users only add queueing: latency grows, errors do not. k6 uses a closed model, where each VU waits for its response, so load self-throttles.
 - Limits come from a single process (the GIL), k6 competing for the same CPU, and Docker Desktop networking.
 
-**Architectural implication:** one uvicorn process scales *vertically* (one queue). Lambda scales *horizontally* (one instance per concurrent request). Required concurrency = req/s × duration ≈ 2,000 × ~0.005 s ≈ **10–20 concurrent Lambda instances** for the 2,000 req/s target, well within default quotas. Adding uvicorn `--workers` would raise local capacity but split the in-memory session, the same problem documented in ADR 0001.
+**Architectural implication:** one uvicorn process scales *vertically* (one queue). Lambda scales *horizontally* (one instance per concurrent request). Required concurrency = req/s × duration ≈ 2,000 × ~0.005 s ≈ **10–20 concurrent Lambda instances** for the 2,000 req/s target, well within default quotas. On AWS, warm-state concurrency was in that range, but scale-out peaked far higher (section 6). Adding uvicorn `--workers` would raise local capacity but split the in-memory session, the same problem documented in ADR 0001.
+
+### 6. AWS deployment and load test (Day 8)
+Deployed with Terraform (13 resources): API Gateway HTTP API → Lambda (Python 3.12, 1,024 MB, zip from S3) → S3. Load generated with k6 from a laptop in Sonora, Mexico, against `us-east-1`.
+
+**Client side (k6):**
+
+| Run | Requests | Errors | `/recommendations` p95 / p99 | Throughput |
+|---|---|---|---|---|
+| Smoke (5 VUs, 30 s) | 128 | 0% | 112 ms / 119 ms | ~4 req/s |
+| Load (ramp to 1,000 VUs, hold 10 min) | **1,320,076** | **0%** | **101 ms / 114 ms** | avg 1,374 req/s, **~1,700 req/s** during the hold |
+
+**Server side (CloudWatch metrics + Logs Insights over `REPORT` lines):**
+
+| Metric | Value |
+|---|---|
+| Invocations | 1,320,206 |
+| Errors / throttles | 0 / 0 (success rate 100%) |
+| Duration avg / p99 / max | **2.86 ms / 4.24 ms** / 198 ms |
+| Cold starts | **248** (0.019% of invocations) |
+| Init duration avg / max | **3.36 s / 3.70 s** |
+| Max memory used | 191 MB of 1,024 MB |
+| Peak concurrent executions | **275** |
+
+![CloudWatch Lambda metrics during the load test: 1.32M invocations, 0 errors, 0 throttles, peak concurrency 275](docs/images/cloudwatch-lambda-metrics.png)
+*Lambda → Monitor during the k6 `load` run: invocations, duration, success rate, throttles and concurrent executions.*
+
+![CloudWatch Logs Insights over REPORT lines: 1,320,206 invocations, 248 cold starts, avg init 3.36 s, avg duration 2.86 ms, p99 4.24 ms, max memory 191 MB](docs/images/cloudwatch-logs-insights.png)
+*CloudWatch Logs Insights over the Lambda `REPORT` lines (query in [`docs/PLAN.md`](docs/PLAN.md#day-8--aws-deployment-and-load-test)).*
+
+**Analysis:**
+- **Horizontal scaling works.** The same code that saturated at ~600 req/s with p99 2.55 s in one local process served ~1,700 req/s on Lambda. p99 stayed at 114 ms and iteration time stayed at 1.18 s (1 s think time + 2 × ~90 ms), so there was no queueing.
+- **Latency is network, not compute.** In-Lambda p99 was 4.24 ms, while the client saw ~90 ms minimum and 114 ms p99. The difference is the Mexico ↔ Virginia round trip plus API Gateway. Clients close to the region (or a region closer to users) would see far less.
+- **The 2,000 req/s target was not reached because of the load generator, not AWS.** With a closed model, each VU waits ~1.18 s per iteration, so 1,000 VUs produce at most ~1,700 req/s (Little's law). Testing a throughput target properly needs an open model (k6 `constant-arrival-rate`) or ~1,200 VUs.
+- **Cold starts amplify scale-out.** Little's law with the warm duration (~1,700 req/s × ~3 ms) predicts about 5–10 concurrent instances. The observed peak was 275, with 248 cold starts. Each new instance spends ~3.4 s initializing (Python imports and `init_state` loading artifacts from S3). Requests that arrive in the meantime find no free warm instance, so Lambda creates even more. The k6 client max of 12 s comes from these rare cold paths, which do not affect p99.
+- **Cold-start tuning options:** a smaller package and lazy imports, smaller artifacts, Lambda SnapStart for Python, or provisioned concurrency for predictable peaks. Memory use (191 MB) leaves room to test 512 MB, but less memory also means less CPU and a slower init, so it needs measuring.
+- **Cost (estimate, us-east-1 list prices, before free tier):** API Gateway ~$1.32, Lambda requests ~$0.26, Lambda compute and init ~$0.08. That is **~$1.66 for the 1.32M-request test ≈ $1.3 per million**. API Gateway is ~80% of it. A Lambda Function URL would remove that line, at the cost of API Gateway features (throttling, authorizers, custom domains).
+- **Operational lessons:** S3 bucket names are global and strict, so the `<your-name>` placeholder in tfvars fails validation after other resources were created. Terraform keeps partial state and the next `apply` continues. Credentials from `aws login` need `botocore[crt]` in boto3. New AWS accounts are blocked from Bedrock until account verification completes (usually < 2 h).
 
 ## Tests (unit / integration)
 
@@ -267,6 +306,7 @@ What this project demonstrates (updated as phases are completed):
 - Developing against local AWS emulators at $0, with the same Lambda package used locally and in the cloud.
 - Load testing with k6 and measuring latency percentiles, error rate, cold starts and cost.
 - Finding a saturation point and explaining it with Little's law, then translating it into Lambda concurrency.
+- Deploying with Terraform and validating on AWS: 1.32M requests at ~1,700 req/s with 0 errors, p99 114 ms end to end and 4.2 ms in Lambda.
 
 ## Learning path
 
