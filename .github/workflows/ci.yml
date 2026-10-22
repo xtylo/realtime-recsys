@@ -8,6 +8,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - run: uv sync
-      - run: uv run ruff check .
-      - run: uv run pytest -v
-      - run: uv run python src/scripts/build_lambda.py   # the Lambda package must always build
+      - run: make check          # ruff + pytest
+      - run: make lambda-build   # the Lambda package must always build

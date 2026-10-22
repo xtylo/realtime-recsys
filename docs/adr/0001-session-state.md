@@ -21,7 +21,7 @@ Observed locally with the Lambda Runtime Interface Emulator (Day 5):
 | Next invocations (warm) | **2.5 – 6.3 ms** |
 | Session after `docker compose restart lambda` (= new instance) | **Lost**: the recommendations fell back to popular items |
 
-The 14.2 s cold start is inflated by the local setup: Docker on Windows reading thousands of package files from a bind mount, plus the RIE. Note that the RIE's `REPORT` line shows a misleading `Init Duration: 0.61 ms`, and `Memory Size` is an emulator default. The real cold start will be measured on AWS (Day 8). The key finding holds regardless: **state stored in Lambda memory survives only while that one instance is warm.**
+The 14.2 s cold start is inflated by the local setup: Docker on Windows reading thousands of package files from a bind mount, plus the RIE. Note that the RIE's `REPORT` line shows a misleading `Init Duration: 0.61 ms`, and `Memory Size` is an emulator default. On AWS (Day 8) the cold start was 3.36 s on average, with a peak of 275 concurrent instances during the load test. The key finding holds regardless: **state stored in Lambda memory survives only while that one instance is warm.**
 
 ## Decision
 

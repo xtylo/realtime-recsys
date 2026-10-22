@@ -21,6 +21,16 @@
 
 > ✅ Foundation complete: built and verified locally, then deployed to AWS with Terraform and load-tested. Step-by-step plan: [`docs/PLAN.md`](docs/PLAN.md). Measured results: [Findings](#findings). Next steps: DynamoDB sessions, offline evaluation, cold-start tuning.
 
+## Documentation
+
+| Document | Read it to… |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Understand how the system works: offline vs online, request flows, the scoring algorithm, runtime modes and configuration |
+| [CODE_WALKTHROUGH.md](docs/CODE_WALKTHROUGH.md) | Navigate the code file by file, and learn how to extend it (new endpoint, DynamoDB sessions, another embeddings provider) |
+| [PLAN.md](docs/PLAN.md) | Rebuild it step by step (8 days) and read the findings log |
+| [ADRs](docs/adr/README.md) | See why key decisions were made |
+| [openapi.json](docs/openapi.json) | Check the API contract without running anything (also served live at `/docs`) |
+
 ## Phased plan
 
 | Phase | Scope | Plan days | Status |
@@ -74,38 +84,59 @@ Locally, the same boxes are replaced by moto (S3), the Lambda Runtime Interface 
 │   ├── lambda/
 │   │   └── handler.py        # AWS Lambda entry point (Mangum)
 │   ├── training/             # Offline jobs that build the model artifacts
-│   ├── scripts/              # build_lambda, invoke_lambda, upload_model, local-env.ps1
+│   ├── scripts/              # build_lambda, invoke_lambda, upload_model, local-env.sh/.ps1
 │   └── infra/
 │       └── terraform/        # API Gateway, Lambda, S3, IAM, CloudWatch
 ├── tests/                    # pytest unit and integration tests
+├── Makefile                  # Shortcuts: make run | test | up | lambda-up | smoke | deploy ...
 └── docs/
-    ├── PLAN.md               # Day-by-day implementation plan
+    ├── ARCHITECTURE.md       # How the system works: flows, algorithm, configuration
+    ├── CODE_WALKTHROUGH.md   # File-by-file guide to the code and how to extend it
+    ├── PLAN.md               # Day-by-day implementation plan and findings log
+    ├── openapi.json          # API contract exported from FastAPI
     └── adr/                  # Architecture Decision Records
 ```
 
 ## Local environment (cloud simulation)
 
-Prerequisites: [uv](https://docs.astral.sh/uv/) and Docker Desktop. **No AWS account is needed.**
+Prerequisites: [uv](https://docs.astral.sh/uv/), Docker and `make`. **No AWS account is needed.** Commands are for bash (Linux, macOS, WSL, Git Bash or the Dev Container). Each `make` target is a one-line wrapper; run `make` to list them all, or see the [Makefile](Makefile).
 
-```powershell
-# 1. Install dependencies and run the tests
-uv sync
-uv run pytest -v
+```bash
+# 1. Install dependencies and run the checks
+make install                 # uv sync
+make check                   # ruff + pytest
 
 # 2. Run the API (Swagger UI at http://127.0.0.1:8000/docs)
-uv run uvicorn app.main:app --reload
+make run                     # uv run uvicorn app.main:app --reload
 
-# 3. Start the local AWS services
-docker compose up -d                       # S3 emulator (moto) on :5000
-docker compose --profile ai up -d          # + Ollama embeddings on :11434
+# 3. Start the local AWS services and point the app to them
+make up-ai                   # S3 emulator (moto) on :5000 + Ollama embeddings on :11434
+source src/scripts/local-env.sh
+make upload-local            # upload artifacts/ to the local S3
 
-# 4. Run the code as a real Lambda function (Runtime Interface Emulator on :9000)
-uv run python src/scripts/build_lambda.py
-docker compose --profile lambda up -d lambda
+# 4. Run the same code as a real Lambda function (Runtime Interface Emulator on :9000)
+make lambda-up               # build the package + start the emulator
 uv run python src/scripts/invoke_lambda.py GET /health
+uv run python src/scripts/invoke_lambda.py POST /events --body '{"session_id":"s1","product_id":1004856,"event_type":"view"}'
+uv run python src/scripts/invoke_lambda.py GET "/recommendations?session_id=s1&k=5"
 ```
 
-On the host, `. .\src\scripts\local-env.ps1` points the app to the local services. If you use the Dev Container, they are configured automatically.
+The model artifacts come from the REES46 dataset: see [Day 2 in the plan](docs/PLAN.md#day-2--data-and-the-first-recommender-offline) (`make artifacts`, then `make index` for search). In the Dev Container, the environment variables of `local-env.sh` are already set.
+
+<details>
+<summary><b>Windows without WSL (PowerShell)</b></summary>
+
+`make` is not installed by default on Windows. The simplest options are WSL, Git Bash or the Dev Container. To stay in PowerShell, run the full commands from the [Makefile](Makefile) and use these equivalents:
+
+| bash | PowerShell |
+|---|---|
+| `source src/scripts/local-env.sh` | `. .\src\scripts\local-env.ps1` |
+| `export NAME=value` | `$env:NAME = "value"` |
+| `cp a b` | `Copy-Item a b` |
+| `curl ... -d '{"k":5}'` | `curl.exe ... -d '{\"k\":5}'` (or use `invoke_lambda.py --body-file file.json`) |
+| `$(terraform ... output -raw x)` | `(terraform ... output -raw x)` |
+
+</details>
 
 | Real AWS | Local emulator |
 |---|---|
@@ -120,17 +151,19 @@ On the host, `. .\src\scripts\local-env.ps1` points the app to the local service
 
 The infrastructure is defined with Terraform in [`src/infra/terraform`](src/infra/terraform). It creates the API Gateway HTTP API, the Lambda function, the S3 bucket, a least-privilege IAM role and CloudWatch logs.
 
-```powershell
-uv run python src/scripts/build_lambda.py           # build/lambda.zip
+```bash
+# Use a shell WITHOUT local-env.sh (the make targets refuse to run in local mode)
+cp src/infra/terraform/terraform.tfvars.example src/infra/terraform/terraform.tfvars
+#   edit artifacts_bucket_name (globally unique: lowercase, digits, hyphens)
 
-cd src/infra/terraform
-Copy-Item terraform.tfvars.example terraform.tfvars  # set artifacts_bucket_name
-terraform init
-terraform apply
+make deploy                  # build the Lambda zip + terraform init/apply
+make upload-aws              # upload artifacts/ before the first request (loaded at cold start)
 
-cd ../../..
-uv run python src/scripts/upload_model.py --bucket <artifacts_bucket output>
-curl.exe "$(terraform -chdir=src/infra/terraform output -raw api_url)health"
+URL=$(make -s api-url)
+curl "${URL}health"
+curl "${URL}recommendations?session_id=s1&k=5"
+
+make destroy                 # when finished
 ```
 
 **Production checklist**
@@ -150,9 +183,10 @@ curl.exe "$(terraform -chdir=src/infra/terraform output -raw api_url)health"
 | `smoke` (default) | 5 users for 30 s | Local sanity check |
 | `load` | 0 → 1,000 users in 5 min, hold 10 min, ramp down 1 min | Against AWS |
 
-```powershell
-docker compose --profile loadtest run --rm k6                         # smoke test against the local API
-docker compose --profile loadtest run --rm -e PROFILE=load -e BASE_URL=<api_url> k6
+```bash
+make run-public                          # terminal 1: API on 0.0.0.0:8000, reachable from the k6 container
+make smoke                               # terminal 2: smoke test against the local API
+make load BASE_URL="$(make -s api-url)"  # load profile against AWS (after make deploy)
 ```
 
 The script fails the run if the error rate is ≥ 0.1% or p99 latency of `/recommendations` is ≥ 200 ms.
@@ -262,19 +296,18 @@ Deployed with Terraform (13 resources): API Gateway HTTP API → Lambda (Python 
 
 Tests use pytest. Unit tests cover the domain logic. Integration tests call the API through FastAPI's `TestClient`, call the Lambda handler with real API Gateway events, and use moto to mock S3.
 
-```powershell
-uv run pytest -v
-uv run ruff check .
+```bash
+make check                   # uv run ruff check . && uv run pytest -v
 ```
 
-Example: the Lambda handler tested in-process with an API Gateway HTTP API event ([`tests/test_lambda_handler.py`](tests/test_lambda_handler.py)):
+Example: the Lambda handler tested in-process with real API Gateway HTTP API events, proving the session survives between warm invocations ([`tests/test_lambda_handler.py`](tests/test_lambda_handler.py)):
 
 ```python
-def test_health_through_lambda_handler():
-    event = invoke_lambda.build_event("GET", "/health")
-    response = lambda_handler.handler(event, FakeLambdaContext())
-    assert response["statusCode"] == 200
-    assert json.loads(response["body"]) == {"status": "ok"}
+def test_session_survives_between_warm_invocations(handler):
+    event = json.dumps({"session_id": "s1", "product_id": 1, "event_type": "view"})
+    call(handler, "POST", "/events", event)
+    _, body = call(handler, "GET", "/recommendations?session_id=s1&k=2")
+    assert [r["product_id"] for r in body] == [2, 3]
 ```
 
 ## Technical challenges

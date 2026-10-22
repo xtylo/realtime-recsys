@@ -1,3 +1,9 @@
+"""Load the semantic search index (`search_index.json`, built by `src/training/build_index.py`).
+
+The index is a LangChain `InMemoryVectorStore` saved as JSON: one embedding vector per product,
+plus its text and `product_id`. Queries are embedded with the same provider and ranked by cosine similarity.
+"""
+
 import os
 import tempfile
 from pathlib import Path

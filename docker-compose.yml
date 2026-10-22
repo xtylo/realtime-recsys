@@ -68,7 +68,7 @@ services:
       - ./build/lambda:/var/task:ro
     environment:
       <<: *local-aws-env
-      ENABLE_SEARCH: "true" # "true" on Day 6 (requires --profile ai)
+      ENABLE_SEARCH: "true" # requires Ollama: docker compose --profile ai up -d
     depends_on:
       - s3
 

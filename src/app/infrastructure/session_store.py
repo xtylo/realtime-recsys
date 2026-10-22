@@ -1,3 +1,10 @@
+"""Session storage: the last N events of each shopping session.
+
+In-memory on purpose for the foundation. Each process (or Lambda instance) has its own copy,
+so production needs a shared store such as DynamoDB: see docs/adr/0001-session-state.md.
+A replacement only has to implement the same two methods: `add` and `get`.
+"""
+
 from collections import defaultdict, deque
 
 
@@ -11,4 +18,5 @@ class InMemorySessionStore:
         self._sessions[session_id].append((product_id, event_type))
 
     def get(self, session_id: str) -> list[tuple[int, str]]:
+        """Events of the session, oldest first. Empty list for an unknown session."""
         return list(self._sessions.get(session_id, []))

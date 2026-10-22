@@ -1,3 +1,9 @@
+"""Load the recommender artifacts (`related.json`, `popular.json`) from local files or S3.
+
+ARTIFACTS_SOURCE=local (default) reads ARTIFACTS_DIR (default: ./artifacts).
+ARTIFACTS_SOURCE=s3 reads s3://ARTIFACTS_BUCKET/ARTIFACTS_PREFIX/ (real AWS, or moto when S3_ENDPOINT_URL is set).
+"""
+
 import json
 import os
 from pathlib import Path
@@ -6,6 +12,7 @@ from app.infrastructure.aws import s3_client
 
 
 def load_artifacts() -> tuple[dict[str, list[int]], list[int]]:
+    """Return (related, popular)."""
     if os.getenv("ARTIFACTS_SOURCE", "local") == "s3":
         bucket = os.environ["ARTIFACTS_BUCKET"]
         prefix = os.getenv("ARTIFACTS_PREFIX", "models/v1")

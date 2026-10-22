@@ -1,0 +1,323 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RealTime RecSys",
+    "description": "Session-aware product recommendations and natural-language product search.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "description": "Liveness check.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "post": {
+        "summary": "Track Event",
+        "description": "Record a user interaction in the session. The next recommendations call reflects it.",
+        "operationId": "track_event_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Event"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recommendations": {
+      "get": {
+        "summary": "Recommendations",
+        "description": "Top-k products for the session: neighbors of what the user just did, then popular items.",
+        "operationId": "recommendations_recommendations_get",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          },
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "title": "K"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Recommendation"
+                  },
+                  "title": "Response Recommendations Recommendations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/search": {
+      "post": {
+        "summary": "Search",
+        "description": "Natural-language product search over embeddings. Returns 503 when ENABLE_SEARCH is not \"true\".",
+        "operationId": "search_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SearchResult"
+                  },
+                  "type": "array",
+                  "title": "Response Search Search Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Event": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "title": "Session Id",
+            "description": "Shopping session identifier.",
+            "examples": [
+              "s1"
+            ]
+          },
+          "product_id": {
+            "type": "integer",
+            "title": "Product Id",
+            "description": "Product the user interacted with.",
+            "examples": [
+              1004856
+            ]
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "view",
+              "cart",
+              "purchase"
+            ],
+            "title": "Event Type",
+            "description": "Interaction type: view < cart < purchase in weight."
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "product_id",
+          "event_type"
+        ],
+        "title": "Event",
+        "description": "A user interaction sent by the storefront."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Recommendation": {
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "title": "Product Id"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Relevance score. 0.0 means a popular-item fallback."
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "score"
+        ],
+        "title": "Recommendation"
+      },
+      "SearchRequest": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query",
+            "description": "Free-text query (English works best).",
+            "examples": [
+              "cheap samsung headphones"
+            ]
+          },
+          "k": {
+            "type": "integer",
+            "title": "K",
+            "description": "Number of results.",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest"
+      },
+      "SearchResult": {
+        "properties": {
+          "product_id": {
+            "type": "integer",
+            "title": "Product Id"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "description": "The product text that was embedded."
+          },
+          "similarity": {
+            "type": "number",
+            "title": "Similarity",
+            "description": "Cosine similarity: higher = more similar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "product_id",
+          "description",
+          "similarity"
+        ],
+        "title": "SearchResult"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

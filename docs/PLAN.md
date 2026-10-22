@@ -11,6 +11,8 @@ By the end, the system:
 4. Runs as an **AWS Lambda** function (locally via the Runtime Interface Emulator).
 5. Offers natural-language product search with **LangChain**.
 
+> **Shell:** commands are written for **bash** (Linux, macOS, WSL, Git Bash or the Dev Container). On Windows PowerShell, see [Windows (PowerShell) equivalents](#windows-powershell-equivalents). Most steps also have a `make` shortcut ([Makefile shortcuts](#makefile-shortcuts)).
+
 > **Golden rule:** every day has a "Done when" checklist. When the hour is up, finish that checklist and stop. Do not start the next day early.
 
 ### Out of scope for this first pass (see "Next steps")
@@ -112,15 +114,20 @@ realtime-recsys/
 │   │   ├── build_lambda.py        # builds build/lambda + build/lambda.zip
 │   │   ├── invoke_lambda.py       # calls the local Lambda with an API Gateway event
 │   │   ├── upload_model.py        # uploads artifacts/ to S3 (local or AWS)
-│   │   └── local-env.ps1          # env vars for local mode (Windows)
+│   │   ├── local-env.sh           # env vars for local mode (bash: source it)
+│   │   └── local-env.ps1          # same for Windows PowerShell
 │   └── infra/terraform/           # API Gateway, Lambda, S3, IAM, logs   Day 8
 ├── tests/
 ├── data/          (git-ignored)   # raw CSV and Parquet
 ├── artifacts/     (git-ignored)   # training output
 ├── build/         (git-ignored)   # Lambda package
 ├── docs/
+│   ├── ARCHITECTURE.md            # how it works (flows, algorithm, configuration)
+│   ├── CODE_WALKTHROUGH.md        # file-by-file guide
 │   ├── PLAN.md
+│   ├── openapi.json
 │   └── adr/
+├── Makefile                       # shortcuts for every step
 ├── pyproject.toml
 └── uv.lock
 ```
@@ -134,16 +141,17 @@ realtime-recsys/
 ## Day 0 — Setup (once, ~20 min, no AWS account)
 
 - [ ] Install:
-  - [uv](https://docs.astral.sh/uv/getting-started/installation/): `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
-  - Docker Desktop
+  - [uv](https://docs.astral.sh/uv/getting-started/installation/): `curl -LsSf https://astral.sh/uv/install.sh | sh` (Windows: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`)
+  - Docker (Docker Desktop on Windows/macOS)
+  - `make` (preinstalled on most Linux/macOS; on Windows use WSL, Git Bash or the Dev Container)
   - VS Code. Open the repo and install the recommended extensions (`@recommended` in the Extensions view).
-- [ ] Allow local PowerShell scripts (once): `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+- [ ] Windows PowerShell only: allow local scripts (once) with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 - [ ] Download the Kaggle dataset **"eCommerce behavior data from multi category store"** (author: mkechinov). You only need **`2019-Oct.csv`** (~5 GB).
-- [ ] Check: `uv --version`, `docker --version`, `docker compose version`.
+- [ ] Check: `uv --version`, `docker --version`, `docker compose version`, `make --version`.
 
 Not needed until Day 8: AWS account, AWS CLI, Terraform.
 
-> **Alternative:** "Dev Containers: Reopen in Container" gives you Python 3.12 and uv inside Linux, with the local S3 already wired (start Ollama from the host with `docker compose --profile ai up -d`). Commands in this plan use PowerShell on Windows. Inside the container, use the same commands in bash. You can skip `local-env.ps1` there, because the variables are already set.
+> **Alternative:** "Dev Containers: Reopen in Container" gives you Python 3.12 and uv inside Linux, with the local S3 already wired (start Ollama from the host with `docker compose --profile ai up -d`). You can skip `source src/scripts/local-env.sh` there, because the variables are already set.
 
 ---
 
@@ -158,7 +166,7 @@ Already in the repo:
 - `tests/test_health.py`: health check and 422 validation.
 - `src/lambda/handler.py` + `tests/test_lambda_handler.py`: the same app called as a Lambda function.
 
-```powershell
+```bash
 uv sync
 uv run pytest -v
 uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
@@ -237,7 +245,7 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
    ```
 5. Run it from the repo root: `uv run python -m training.build_artifacts`
 6. Inspect the result:
-   ```powershell
+   ```bash
    uv run python -c "import json; r=json.load(open('artifacts/related.json')); k=next(iter(r)); print(k, r[k][:10])"
    ```
 
@@ -531,13 +539,13 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
 ### Steps
 1. Test dependency (boto3 is already a runtime dependency): `uv add --dev "moto[s3]"`
 2. Start the fake S3 and switch your terminal to local mode:
-   ```powershell
+   ```bash
    docker compose up -d                 # moto on http://localhost:5000
-   . .\src\scripts\local-env.ps1         # the leading dot matters
+   source src/scripts/local-env.sh      # exports the variables into this shell
    ```
    Open http://localhost:5000/moto-api/ to see moto's dashboard.
 3. Upload your artifacts. moto keeps everything **in memory**, so repeat this after every restart:
-   ```powershell
+   ```bash
    uv run python src/scripts/upload_model.py --create-bucket
    ```
    Read `src/scripts/upload_model.py`: it is the same boto3 code you would use against AWS.
@@ -607,8 +615,8 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
        assert related == {"1": [2]}
        assert popular == [5]
    ```
-7. Run the API reading from the fake S3 (same terminal where you loaded `local-env.ps1`):
-   ```powershell
+7. Run the API reading from the fake S3 (same shell where you sourced `local-env.sh`):
+   ```bash
    uv run uvicorn app.main:app --reload
    ```
 
@@ -630,24 +638,23 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
    - `src/scripts/build_lambda.py`: installs the runtime dependencies **for Linux / Python 3.12** and adds `app/` + `handler.py`.
    - `docker-compose.yml` → `lambda` service: the official AWS image `public.ecr.aws/lambda/python:3.12`, which includes the Runtime Interface Emulator (RIE).
 2. Build the package. Repeat this after every code or dependency change:
-   ```powershell
+   ```bash
    uv run python src/scripts/build_lambda.py
    ```
    Look at `build/lambda/`: this is exactly what AWS will run.
 3. Start the Lambda. It reads the model from the moto S3, so do Day 4 step 3 first:
-   ```powershell
+   ```bash
    docker compose --profile lambda up -d lambda
    docker compose logs -f lambda        # Ctrl+C to stop following
    ```
 4. Invoke it. The RIE expects a Lambda *event*, not plain HTTP. `invoke_lambda.py` builds the same event API Gateway sends:
-   ```powershell
+   ```bash
    uv run python src/scripts/invoke_lambda.py GET /health
    uv run python src/scripts/invoke_lambda.py GET "/recommendations?session_id=s1&k=5"
-   '{"session_id":"s1","product_id":1004856,"event_type":"view"}' | Set-Content event.json
-   uv run python src/scripts/invoke_lambda.py POST /events --body-file event.json
+   uv run python src/scripts/invoke_lambda.py POST /events --body '{"session_id":"s1","product_id":1004856,"event_type":"view"}'
    uv run python src/scripts/invoke_lambda.py GET "/recommendations?session_id=s1&k=5"
    ```
-   Use a `product_id` from your `related.json`. Add `event.json` to `.gitignore` or delete it afterwards.
+   Use a `product_id` from your `related.json`. (`--body-file event.json` is also available, which is handy on PowerShell.)
 5. **Experiment 1: cold vs warm.** Compare the milliseconds of the first call against the next ones. The logs show `Init Duration` on the first one (loading Python + `init_state`).
 6. **Experiment 2: memory is not shared state.** Send an event, then restart the function (`docker compose restart lambda`, which works like a new Lambda instance) and ask for recommendations again: **the session is gone**. In AWS this happens whenever Lambda recycles an instance or runs several in parallel. Each instance has its own memory, so an event can land on one instance and the next request on another.
 7. Write your first ADR: `docs/adr/0001-session-state.md` (in-memory vs DynamoDB, with what you observed).
@@ -667,13 +674,13 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
 
 ### Steps
 1. Start Ollama. The first time, it downloads the `nomic-embed-text` model (~270 MB):
-   ```powershell
+   ```bash
    docker compose --profile ai up -d
    docker compose logs ollama-init      # wait for "success"
    ```
-   > If you already run Ollama natively on Windows, port 11434 is taken. Stop the native app or remove the `ports` mapping of the `ollama` service.
+   > If you already run Ollama natively on your machine, port 11434 is taken. Stop the native app or remove the `ports` mapping of the `ollama` service.
 2. Dependencies:
-   ```powershell
+   ```bash
    uv add langchain-core langchain-ollama numpy
    ```
    > This uses LangChain's `InMemoryVectorStore` from `langchain-core`. It stores the index as JSON (no pickle) and is fast enough for a few thousand products. `langchain-community`, where the FAISS integration lived, is being retired.
@@ -797,19 +804,18 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
          ]
      ```
 8. Try it with uvicorn, reading local files:
-   ```powershell
-   $env:ARTIFACTS_SOURCE="local"; $env:ENABLE_SEARCH="true"; $env:OLLAMA_URL="http://localhost:11434"
-   uv run uvicorn app.main:app --reload
+   ```bash
+   ARTIFACTS_SOURCE=local ENABLE_SEARCH=true OLLAMA_URL=http://localhost:11434 uv run uvicorn app.main:app --reload
    ```
-   ```powershell
-   curl.exe -X POST "http://127.0.0.1:8000/search" -H "Content-Type: application/json" -d '{\"query\":\"cheap samsung headphones\",\"k\":5}'
+   ```bash
+   curl -X POST "http://127.0.0.1:8000/search" -H "Content-Type: application/json" -d '{"query":"cheap samsung headphones","k":5}'
    ```
    The dataset categories are in English, so English queries work best.
 9. Try it as a Lambda:
-   - Set `ENABLE_SEARCH: "true"` in the `lambda` service of `docker-compose.yml` and in `src/scripts/local-env.ps1`.
+   - Set `ENABLE_SEARCH: "true"` in the `lambda` service of `docker-compose.yml` (it is the default now in `local-env.sh` / `local-env.ps1`).
    - Re-upload the artifacts (now including `search_index.json`): `uv run python src/scripts/upload_model.py --create-bucket`
    - `uv run python src/scripts/build_lambda.py` and then `docker compose --profile lambda up -d --force-recreate lambda`
-   - Create `search.json` with `{"query":"cheap samsung headphones","k":5}` and run `uv run python src/scripts/invoke_lambda.py POST /search --body-file search.json`
+   - `uv run python src/scripts/invoke_lambda.py POST /search --body '{"query":"cheap samsung headphones","k":5}'`
 
 ### Done when
 - [ ] A natural-language query returns sensible products with uvicorn and through the local Lambda.
@@ -837,24 +843,23 @@ uv run uvicorn app.main:app --reload     # http://127.0.0.1:8000/docs
          - uses: actions/checkout@v4
          - uses: astral-sh/setup-uv@v6
          - run: uv sync
-         - run: uv run ruff check .
-         - run: uv run pytest -v
-         - run: uv run python src/scripts/build_lambda.py   # the Lambda package must always build
+         - run: make check          # ruff + pytest
+         - run: make lambda-build   # the Lambda package must always build
    ```
    The tests need neither moto server, Ollama nor AWS, so CI needs no extra setup.
 2. Local smoke load test. Run the API listening on all interfaces, so the k6 container can reach it:
-   ```powershell
+   ```bash
    uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
    In another terminal:
-   ```powershell
+   ```bash
    docker compose --profile loadtest run --rm k6
    ```
-   Read the summary: `http_req_duration` p(95)/p(99), `http_req_failed`, `iterations`. Windows may ask to allow Python through the firewall.
+   Read the summary: `http_req_duration` p(95)/p(99), `http_req_failed`, `iterations`. On Windows, the firewall may ask to allow Python.
    > Do not use `--workers 4` with the in-memory session: each worker is a separate process with its own memory. It is the same lesson as Day 5.
 
    **Optional stress run**, to find where one process saturates:
-   ```powershell
+   ```bash
    docker compose --profile loadtest run --rm -e PROFILE=load k6
    ```
    Expect the thresholds to fail. That is the point: latency grows when the server saturates. k6 then exits with a non-zero code, and Docker Desktop prints a "Debug this Compose error with Gordon" hint. That hint is not a compose error. Analyze the result with Little's law (see [Findings log](#findings-log), Day 7).
@@ -877,55 +882,56 @@ Do this **once**, when everything works locally. A live URL and real numbers in 
 ### Steps
 1. AWS account and a **$5 USD budget alert**: Billing → Budgets → *Create budget* → *Monthly cost budget*.
 2. An IAM user for development (or IAM Identity Center). Install the tools and log in:
-   ```powershell
-   winget install Amazon.AWSCLI
-   winget install Hashicorp.Terraform
+   ```bash
+   # Install the AWS CLI v2 and Terraform:
+   #   macOS:   brew install awscli hashicorp/tap/terraform
+   #   Linux:   see the official install guides (AWS CLI v2 zip, HashiCorp apt/yum repo)
+   #   Windows: winget install Amazon.AWSCLI ; winget install Hashicorp.Terraform
    aws configure            # region: us-east-1   (or: aws login)
    aws sts get-caller-identity
    ```
-   If you sign in with `aws login`, boto3 needs the AWS Common Runtime to read those credentials: `uv add --dev "botocore[crt]"`. If another tool does not understand them either, export them for the current terminal: `aws configure export-credentials --format powershell | Invoke-Expression`.
-   **Use a new terminal WITHOUT `local-env.ps1`**, so the fake credentials and `S3_ENDPOINT_URL` do not point to moto.
+   If you sign in with `aws login`, boto3 needs the AWS Common Runtime to read those credentials: `uv add --dev "botocore[crt]"`. If another tool does not understand them either, export them for the current shell: `eval "$(aws configure export-credentials --format env)"`.
+   **Use a new shell WITHOUT `local-env.sh`**, so the fake credentials and `S3_ENDPOINT_URL` do not point to moto. (The `make` AWS targets refuse to run when `S3_ENDPOINT_URL` is set.)
 3. In the **Amazon Bedrock** console → *Model catalog*, check that **Titan Text Embeddings V2** (`amazon.titan-embed-text-v2:0`) is available in `us-east-1`. Enable model access if asked. New accounts get `AccessDeniedException: Your account is currently being verified` until verification finishes (usually < 2 h). Meanwhile you can deploy with `enable_search = false`.
 4. Add the Bedrock provider and **rebuild the search index with Bedrock**. Ollama vectors are not compatible with Titan vectors.
-   ```powershell
+   ```bash
    uv add langchain-aws
-   $env:EMBEDDINGS_PROVIDER="bedrock"; $env:AWS_DEFAULT_REGION="us-east-1"
-   uv run python -m training.build_index
+   EMBEDDINGS_PROVIDER=bedrock AWS_DEFAULT_REGION=us-east-1 uv run python -m training.build_index
    ```
 5. Build the package and deploy:
-   ```powershell
+   ```bash
    uv run python src/scripts/build_lambda.py
    cd src/infra/terraform
-   Copy-Item terraform.tfvars.example terraform.tfvars   # set artifacts_bucket_name and enable_search = true
+   cp terraform.tfvars.example terraform.tfvars   # set artifacts_bucket_name and enable_search = true
    terraform init
    terraform plan       # read it: what will be created?
    terraform apply
    cd ../../..
    ```
 6. Upload the artifacts **before the first request** (the Lambda loads them at cold start):
-   ```powershell
-   uv run python src/scripts/upload_model.py --bucket (terraform -chdir=src/infra/terraform output -raw artifacts_bucket)
+   ```bash
+   uv run python src/scripts/upload_model.py --bucket "$(terraform -chdir=src/infra/terraform output -raw artifacts_bucket)"
    ```
 7. Test the public URL and read the logs:
-   ```powershell
-   $URL = terraform -chdir=src/infra/terraform output -raw api_url
-   curl.exe "${URL}health"
-   curl.exe "${URL}recommendations?session_id=s1&k=5"
+   ```bash
+   URL=$(terraform -chdir=src/infra/terraform output -raw api_url)
+   curl "${URL}health"
+   curl "${URL}recommendations?session_id=s1&k=5"
    aws logs tail /aws/lambda/realtime-recsys --follow     # look for Init Duration
    ```
    If you called the API before uploading the artifacts, the instance failed its cold start. Force fresh instances with:
    `aws lambda update-function-configuration --function-name realtime-recsys --description "reload"`
 8. Load test against AWS. Check your Lambda concurrency quota first (*Service Quotas → AWS Lambda → Concurrent executions*). Start with the smoke profile:
-   ```powershell
-   docker compose --profile loadtest run --rm -e BASE_URL=$URL k6
-   docker compose --profile loadtest run --rm -e BASE_URL=$URL -e PROFILE=load k6
+   ```bash
+   docker compose --profile loadtest run --rm -e BASE_URL="$URL" k6
+   docker compose --profile loadtest run --rm -e BASE_URL="$URL" -e PROFILE=load k6
    ```
    Fill in the "Target metrics" table of the README with the results.
 9. Screenshot or GIF for the README, then **clean up**:
-   ```powershell
+   ```bash
    terraform -chdir=src/infra/terraform destroy
    ```
-10. Back to local work: `$env:EMBEDDINGS_PROVIDER="ollama"` and rebuild the index (`uv run python -m training.build_index`).
+10. Back to local work: rebuild the index with Ollama (`EMBEDDINGS_PROVIDER=ollama uv run python -m training.build_index`).
 
 ### Done when
 - [ ] You had a working public URL and documented it in the README.
@@ -948,7 +954,7 @@ What was measured and learned on each day (Windows laptop, Docker Desktop, Pytho
 - The 20-event session window can be flushed by repeated identical events. Collapsing consecutive duplicates is an improvement candidate. Whether to exclude only purchased items depends on the business (e.g. groceries need re-purchase).
 
 ### Day 4 — Local S3
-- `NoCredentialsError` means the terminal does not have `local-env.ps1` loaded. Without `S3_ENDPOINT_URL`, boto3 would target **real AWS**, so the error is a useful safety net. Variables live per terminal session.
+- `NoCredentialsError` means the shell does not have `local-env.sh` (or `local-env.ps1`) loaded. Without `S3_ENDPOINT_URL`, boto3 would target **real AWS**, so the error is a useful safety net. Variables live per terminal session.
 
 ### Day 5 — Lambda execution model
 | Measurement (local RIE) | Result |
@@ -1034,21 +1040,55 @@ Lessons:
 | `invoke_lambda.py`: connection refused | Lambda container not running | `docker compose --profile lambda up -d lambda` |
 | Local Lambda returns errors right after a code change | `build/lambda` is outdated | `build_lambda.py`, then `docker compose restart lambda` |
 | `Runtime.ImportModuleError` | Package not built, or built in another folder | Run `build_lambda.py` from the repo root |
-| Port 11434 already in use | Native Ollama is running on Windows | Stop it or remove the port mapping in `docker-compose.yml` |
+| Port 11434 already in use | Native Ollama is running on your machine | Stop it or remove the port mapping in `docker-compose.yml` |
 | k6 cannot reach `host.docker.internal:8000` | uvicorn listening only on 127.0.0.1 | `--host 0.0.0.0` and allow it in the firewall |
 | Session lost between requests | Different processes/instances or a restart | Expected (Day 5 ADR). Production uses DynamoDB |
 | Tests fail only in your terminal | Leftover local-mode variables | The `conftest.py` fixture isolates them; check it is in place |
 | Nonsense search results | Index built with another embeddings provider | Rebuild the index with the current provider |
-| PowerShell scripts blocked | Execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| (Windows) PowerShell scripts blocked | Execution policy | `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
 | (Day 8) `AccessDeniedException` from Bedrock | Model access not enabled | Enable it in the Bedrock console |
 | (Day 8) `BucketAlreadyExists` | Bucket names are global | Pick a more unique `artifacts_bucket_name` |
 | (Day 8) `validating S3 Bucket (recsys-<your-name>-artifacts) name` | Placeholder left in `terraform.tfvars` | Set a real name (lowercase, digits, hyphens) and run `terraform apply` again; the state keeps what was already created |
 | (Day 8) `Using the login credential provider requires ... botocore[crt]` | Signed in with `aws login` | `uv add --dev "botocore[crt]"` |
 | (Day 8) `AccessDeniedException: Your account is currently being verified` | New AWS account not verified yet | Wait (usually < 2 h); deploy with `enable_search = false` meanwhile |
-| `NoCredentialsError: Unable to locate credentials` | `local-env.ps1` not loaded in this terminal | `. .\src\scripts\local-env.ps1` (check with `$env:S3_ENDPOINT_URL`) |
+| `NoCredentialsError: Unable to locate credentials` | Local-mode variables not loaded in this shell | `source src/scripts/local-env.sh` (check with `echo $S3_ENDPOINT_URL`) |
 | Local Lambda returns `503 Search is disabled` | `ENABLE_SEARCH` is `"false"` in `docker-compose.yml` | Set it to `"true"`, then `docker compose --profile lambda up -d --force-recreate lambda` |
-| `FileNotFoundError: '\\tmp\\search_index.json...'` on Windows | Old code with a hard-coded `/tmp` | Use `tempfile.gettempdir()` (already fixed in `search.py`) |
+| (Windows) `FileNotFoundError: '\\tmp\\search_index.json...'` | Old code with a hard-coded `/tmp` | Use `tempfile.gettempdir()` (already fixed in `search.py`) |
+| `make: command not found` | `make` is not installed | Linux: `sudo apt install make`; macOS: `xcode-select --install`; Windows: WSL, Git Bash or the Dev Container (or run the full command from the `Makefile`) |
+| `make deploy` says the shell is in local mode | `S3_ENDPOINT_URL` is set by `local-env.sh` | Open a new shell without it |
 | k6 ends with "Debug this Compose error with Gordon" | k6 exits non-zero when a threshold fails | Not a compose error: read the k6 summary |
+
+---
+
+## Makefile shortcuts
+
+Every step above can also be run with `make` (`make` alone lists the targets):
+
+| Step | Command | Shortcut |
+|---|---|---|
+| Install / test | `uv sync`, `uv run ruff check . && uv run pytest -v` | `make install`, `make check` |
+| Run the API | `uv run uvicorn app.main:app --reload` | `make run` |
+| Day 2 artifacts | `uv run python -m training.build_artifacts` | `make artifacts` |
+| Day 4 local S3 | `docker compose up -d` + `upload_model.py --create-bucket` | `make up`, `make upload-local` |
+| Day 5 local Lambda | `build_lambda.py` + `docker compose --profile lambda up -d --force-recreate lambda` | `make lambda-up` |
+| Day 6 search | `docker compose --profile ai up -d`, `python -m training.build_index` | `make up-ai`, `make index` |
+| Day 7 load tests | `uvicorn --host 0.0.0.0`, `docker compose --profile loadtest run --rm k6` | `make run-public`, `make smoke`, `make load` |
+| Day 8 AWS | `terraform init/apply`, `upload_model.py --bucket ...`, `terraform destroy` | `make deploy`, `make upload-aws`, `make api-url`, `make destroy` |
+
+## Windows (PowerShell) equivalents
+
+The simplest path on Windows is WSL, Git Bash or the Dev Container: the bash commands work as they are. To stay in PowerShell:
+
+| bash | PowerShell |
+|---|---|
+| `source src/scripts/local-env.sh` | `. .\src\scripts\local-env.ps1` |
+| `export NAME=value` / `NAME=value cmd` | `$env:NAME = "value"; cmd` |
+| `echo $NAME` | `$env:NAME` |
+| `cp a b` | `Copy-Item a b` |
+| `curl -d '{"k":5}' ...` | `curl.exe -d '{\"k\":5}' ...` |
+| `URL=$(terraform ... output -raw api_url)` | `$URL = terraform ... output -raw api_url` |
+| `eval "$(aws configure export-credentials --format env)"` | `aws configure export-credentials --format powershell \| Invoke-Expression` |
+| `invoke_lambda.py POST /events --body '{...}'` | `invoke_lambda.py POST /events --body-file event.json` |
 
 ---
 

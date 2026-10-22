@@ -6,8 +6,8 @@ One decision per file: `NNNN-short-title.md`, with three sections: **Context**, 
 |---|---|---|
 | [0001](0001-session-state.md) | Session state: in-memory now, DynamoDB in production (Day 5) | Accepted |
 | [0002](0002-llm-out-of-hot-path.md) | Keep generative LLMs out of the hot path; embeddings for search (Day 6) | Accepted |
-| 0003 | moto + Lambda RIE + Ollama instead of LocalStack for local development | Pending |
-| 0004 | Lambda zip package from S3 instead of a container image | Pending |
+| [0003](0003-local-aws-emulation.md) | Emulate AWS locally with moto, the Lambda RIE and Ollama (not LocalStack) | Accepted |
+| [0004](0004-lambda-zip-from-s3.md) | Deploy Lambda as a zip package stored in S3 (not a container image) | Accepted |
 
 ## Template
 

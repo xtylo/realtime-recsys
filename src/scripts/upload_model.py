@@ -1,7 +1,7 @@
 """Upload the local model artifacts (artifacts/ folder) to S3.
 
 Works against real AWS, or against the local S3 emulator (moto) when
-S3_ENDPOINT_URL is set (see src/scripts/local-env.ps1 and docker-compose.yml).
+S3_ENDPOINT_URL is set (see src/scripts/local-env.sh and docker-compose.yml).
 
 Usage:
     uv run python src/scripts/upload_model.py --create-bucket       # local S3 (moto)
